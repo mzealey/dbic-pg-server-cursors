@@ -6,22 +6,28 @@ use mro 'c3';
 use Try::Tiny;
 
 __PACKAGE__->mk_group_accessors('simple' =>
-    qw/cursor_name cursor_sth cursor_bulk_fetch/
+    qw/cursor_name cursor_sth/
 );
 
-sub fetch_next_bulk {
+# Track cursor numbers through the lifetime of the program. Only really needs to be tracked for each dbh connection though.
+my $cursor_counter = 1;
+sub _generate_cursor_name { 'dbic_cursor_' . $cursor_counter++ }
+
+sub cursor_page_size { shift->{args}[3]{cursor_page_size} || 1_000 }
+
+sub fetch_next_page {
     my $self = shift;
 
-    (undef, my $cursor_sth, undef) = $self->storage->_dbh_execute( $self->sth->{Database}, 'FETCH ' . $self->cursor_bulk_fetch . ' FROM ' . $self->cursor_name, [] );
+    (undef, my $cursor_sth, undef) = $self->storage->_dbh_execute( $self->sth->{Database}, 'FETCH ' . $self->cursor_page_size . ' FROM ' . $self->cursor_name, [] );
 
     $self->cursor_sth($cursor_sth);
 }
 
 # Modification of the standard next function so that we declare a cursor and
-# fetch B<cursor_bulk_fetch> (default 1000) rows at a time. Support for
-# software offset/limit is removed as postgres has great server-side
-# offset/limit support.
-#
+# fetch B<cursor_page_size> (default 1000, change by specifying as search attrs
+# in the B<ResultSet>) rows at a time. Support for software offset/limit is
+# removed as postgres has great server-side offset/limit support.
+
 # Note: We use $self->sth->{Database} for the FETCH/CLOSE access so that its
 # fate is tied to that of the connection that started the cursor
 sub next {
@@ -31,15 +37,14 @@ sub next {
 
   # Create the main server-side cursor if we didn't get it already
   unless ($self->sth) {
-    $self->cursor_name('cursor');
-    $self->cursor_bulk_fetch(1_000);
+    $self->cursor_name($self->_generate_cursor_name);
 
     # Issue the server-side declare cursor query
     $self->{args}[3]{_as_cursor} = $self->cursor_name;
     (undef, my $sth, undef) = $self->storage->_select( @{$self->{args}} );
 
     $self->sth($sth);
-    $self->fetch_next_bulk;
+    $self->fetch_next_page;
 
     $self->{_results} = [ (undef) x $self->cursor_sth->FETCH('NUM_OF_FIELDS') ];
     $self->cursor_sth->bind_columns( \( @{$self->{_results}} ) );
@@ -49,13 +54,13 @@ sub next {
       if ($self->cursor_sth->fetch) {
         $self->{_pos}++;
         return @{$self->{_results}};
-      } elsif( !$refetched ) {
-        $self->fetch_next_bulk;
-      } else {
-        $self->{_done} = 1;
-        return ();
       }
+
+      $self->fetch_next_page if !$refetched;
   }
+
+  $self->{_done} = 1;
+  return ();
 }
 
 sub __finish_sth {

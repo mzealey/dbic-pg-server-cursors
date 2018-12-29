@@ -4,9 +4,8 @@ use v5.16;
 use FindBin::libs;
 use strictures;
 
-use lib '../Songs/lib';
-use Songs::Schema;
-my $dbic = Songs::Schema->connect;
+use Songs::ServerCursorSchema;
+my $dbic = Songs::ServerCursorSchema->connect;
 my $rs = $dbic->resultset('Song');
 my $count = 0;
 while( my $row = $rs->next ) {
@@ -14,6 +13,7 @@ while( my $row = $rs->next ) {
     last if $count > 2500;
 }
 $rs->reset;
+$rs = $rs->search({}, { cursor_page_size => 500 });
 while( my $row = $rs->next ) {
     $count++;
 }
