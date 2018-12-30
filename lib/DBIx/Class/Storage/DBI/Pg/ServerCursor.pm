@@ -13,7 +13,7 @@ __PACKAGE__->mk_group_accessors('simple' =>
 my $cursor_counter = 1;
 sub _generate_cursor_name { 'dbic_cursor_' . $cursor_counter++ }
 
-sub cursor_page_size { shift->{args}[3]{cursor_page_size} || 1_000 }
+sub cursor_page_size { shift->{args}[3]{cursor_page_size} || 0 }
 
 sub fetch_next_page {
     my $self = shift;
@@ -23,20 +23,26 @@ sub fetch_next_page {
     $self->cursor_sth($cursor_sth);
 }
 
-# Modification of the standard next function so that we declare a cursor and
-# fetch B<cursor_page_size> (default 1000, change by specifying as search attrs
-# in the B<ResultSet>) rows at a time. Support for software offset/limit is
-# removed as postgres has great server-side offset/limit support.
+# Modification of the standard next function so that if C<cursor_page_size> is
+# specified in the ResultSet search attrs it will declare a server-side cursor
+# and fetch that number of rows at a time.  Support for software offset/limit
+# is removed as postgres has great server-side offset/limit support. If
+# C<cursor_page_size> is not specified then it behaves exactly as a normal DBIC
+# software cursor including support for software offset/limit
 
 # Note: We use $self->sth->{Database} for the FETCH/CLOSE access so that its
 # fate is tied to that of the connection that started the cursor
 sub next {
   my $self = shift;
-
   return if $self->{_done};
 
-  # Create the main server-side cursor if we didn't get it already
+  # Short-circuit to main method if we are not using server-side cursor
+  return $self->next::method( @_ ) if $self->sth && !$self->cursor_name;
+
   unless ($self->sth) {
+    return $self->next::method( @_ ) unless $self->cursor_page_size;
+
+    # Create the main server-side cursor if we didn't get it already
     $self->cursor_name($self->_generate_cursor_name);
 
     # Issue the server-side declare cursor query
@@ -73,6 +79,7 @@ sub __finish_sth {
   # check, and resetting a cursor in a child is perfectly valid
 
   my $self = shift;
+  return $self->next::method( @_ ) unless $self->cursor_name;
 
   # No need to care about failures here
   try { local $SIG{__WARN__} = sub {}; $self->{cursor_sth}->finish } if (

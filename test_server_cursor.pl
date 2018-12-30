@@ -6,14 +6,21 @@ use strictures;
 
 use Songs::ServerCursorSchema;
 my $dbic = Songs::ServerCursorSchema->connect;
-my $rs = $dbic->resultset('Song');
+my $rs_no_cursor = $dbic->resultset('Song')->search({}, { rows => 2000 });
 my $count = 0;
+while( my $row = $rs_no_cursor->next ) {
+    $count++;
+    last if $count > 2500;
+}
+
+my $rs = $dbic->resultset('Song')->search({}, { cursor_page_size => 500 });
+$count = 0;
 while( my $row = $rs->next ) {
     $count++;
     last if $count > 2500;
 }
 $rs->reset;
-$rs = $rs->search({}, { cursor_page_size => 500 });
+$count = 0;
 while( my $row = $rs->next ) {
     $count++;
 }
